@@ -1,4 +1,4 @@
-# Margo
+# gnostr-registry
 
 Margo is an alternate [Cargo registry][registry] that is built using
 completely static files, allowing it to be easily served.
