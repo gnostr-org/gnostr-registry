@@ -18,6 +18,9 @@ mod html;
 #[cfg(feature = "p2p")]
 mod p2p;
 
+#[cfg(feature = "sync-crates-io")]
+mod crates_io;
+
 #[derive(Debug, argh::FromArgs)]
 /// Manage a static crate registry
 struct Args {
@@ -34,6 +37,8 @@ enum Subcommand {
     Yank(YankArgs),
     List(ListArgs),
     GenerateHtml(GenerateHtmlArgs),
+    #[cfg(feature = "sync-crates-io")]
+    Sync(SyncArgs),
     #[cfg(feature = "p2p")]
     Serve(ServeArgs),
 }
@@ -155,6 +160,21 @@ struct ListArgs {
     registry: Option<PathBuf>,
 }
 
+/// Synchronize crate versions from crates.io into the registry
+#[cfg(feature = "sync-crates-io")]
+#[derive(Debug, argh::FromArgs)]
+#[argh(subcommand)]
+#[argh(name = "sync")]
+struct SyncArgs {
+    /// path to the registry to sync into
+    #[argh(option)]
+    registry: Option<PathBuf>,
+
+    /// names of the crates to sync from crates.io
+    #[argh(positional)]
+    crates: Vec<String>,
+}
+
 #[snafu::report]
 fn main() -> Result<(), Error> {
     let args: Args = argh::from_env();
@@ -169,6 +189,8 @@ fn main() -> Result<(), Error> {
         Subcommand::Yank(yank) => do_yank(global, yank)?,
         Subcommand::List(list) => do_list(global, list)?,
         Subcommand::GenerateHtml(html) => do_generate_html(global, html)?,
+        #[cfg(feature = "sync-crates-io")]
+        Subcommand::Sync(sync) => do_sync(global, sync)?,
         #[cfg(feature = "p2p")]
         Subcommand::Serve(serve) => do_serve(global, serve)?,
     }
@@ -226,6 +248,13 @@ enum Error {
     Serve {
         #[snafu(source(from(ServeError, Box::new)))]
         source: Box<ServeError>,
+    },
+
+    #[cfg(feature = "sync-crates-io")]
+    #[snafu(transparent)]
+    Sync {
+        #[snafu(source(from(SyncError, Box::new)))]
+        source: Box<SyncError>,
     },
 }
 
@@ -434,6 +463,95 @@ fn do_list(_global: &Global, list: ListArgs) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[cfg(feature = "sync-crates-io")]
+fn do_sync(global: &Global, sync: SyncArgs) -> Result<(), Error> {
+    use sync_error::*;
+
+    let r = discover_registry(sync.registry)?;
+
+    let client = crates_io::Client::new();
+
+    for crate_name in &sync.crates {
+        println!("Syncing `{crate_name}` from crates.io...");
+
+        let versions = client
+            .fetch_versions(crate_name)
+            .context(FetchVersionsSnafu {
+                crate_name: crate_name.as_str(),
+            })?;
+
+        let crate_name_typed = crate_name
+            .parse::<common::CrateName>()
+            .context(CrateNameSnafu {
+                crate_name: crate_name.as_str(),
+            })?;
+
+        let known: std::collections::BTreeSet<semver::Version> = r
+            .list_all()
+            .context(ListSnafu)?
+            .get(&crate_name_typed)
+            .map(|idx| idx.keys().cloned().collect())
+            .unwrap_or_default();
+
+        for version in &versions {
+            if known.contains(&version.num) {
+                println!("  {crate_name} {} already in registry, skipping", version.num);
+                continue;
+            }
+
+            println!("  Downloading {crate_name} {}...", version.num);
+            let crate_data = client
+                .download_crate(crate_name, &version.num.to_string())
+                .context(DownloadSnafu {
+                    crate_name: crate_name.as_str(),
+                    version: version.num.to_string(),
+                })?;
+
+            let tmp_path = std::env::temp_dir()
+                .join(format!("{}-{}.crate", crate_name, version.num));
+            fs::write(&tmp_path, &crate_data).context(WriteTmpSnafu { path: &tmp_path })?;
+
+            r.add(global, &tmp_path)?;
+
+            let _ = fs::remove_file(&tmp_path);
+        }
+    }
+
+    r.maybe_generate_html()?;
+
+    Ok(())
+}
+
+#[cfg(feature = "sync-crates-io")]
+#[derive(Debug, Snafu)]
+#[snafu(module)]
+enum SyncError {
+    #[snafu(display("Could not fetch versions for `{crate_name}` from crates.io"))]
+    FetchVersions {
+        source: crates_io::Error,
+        crate_name: String,
+    },
+
+    #[snafu(display("Invalid crate name `{crate_name}`"))]
+    CrateName {
+        source: common::CrateNameError,
+        crate_name: String,
+    },
+
+    #[snafu(display("Could not list registry contents"))]
+    List { source: ListAllError },
+
+    #[snafu(display("Could not download `{crate_name}` v{version} from crates.io"))]
+    Download {
+        source: crates_io::Error,
+        crate_name: String,
+        version: String,
+    },
+
+    #[snafu(display("Could not write temporary crate file to {}", path.display()))]
+    WriteTmp { source: io::Error, path: PathBuf },
 }
 
 #[cfg(feature = "p2p")]

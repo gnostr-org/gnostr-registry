@@ -14,6 +14,7 @@ default = ["html"]
 
 html = ["dep:maud", "dep:indoc"]
 p2p = ["dep:async-trait", "dep:base64", "dep:libp2p", "dep:tokio"]
+sync-crates-io = ["dep:ureq"]
 
 [workspace]
 members = [
@@ -56,6 +57,7 @@ snafu.workspace = true
 tar = { version = "0.4.40", default-features = false }
 tokio = { workspace = true, optional = true }
 toml = { version = "0.9.8", default-features = false, features = ["display", "parse", "serde"] }
+ureq = { version = "2.12.1", default-features = false, features = ["tls", "json"], optional = true }
 url = { version = "2.5.0", default-features = false, features = ["serde"] }
 walkdir = { version = "2.5.0", default-features = false }
 
