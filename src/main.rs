@@ -515,7 +515,12 @@ fn do_sync(global: &Global, sync: SyncArgs) -> Result<(), Error> {
 
             r.add(global, &tmp_path)?;
 
-            let _ = fs::remove_file(&tmp_path);
+            if let Err(e) = fs::remove_file(&tmp_path) {
+                eprintln!(
+                    "Warning: could not remove temporary file {}: {e}",
+                    tmp_path.display(),
+                );
+            }
         }
     }
 
